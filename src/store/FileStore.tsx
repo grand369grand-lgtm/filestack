@@ -71,7 +71,7 @@ export function FileStoreProvider({ children: node }: { children: React.ReactNod
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selection, setSelection] = useState<string[]>([]);
   const [stars, setStars] = useState<Record<string, boolean>>({});
-  const [info, setInfo] = useState<EngineInfo>({ engine: 'js', version: '0.1.0' });
+  const [info, setInfo] = useState<EngineInfo>({ engine: 'rust', version: '0.0.0' });
   const [roots, setRoots] = useState<StorageRoot[]>([]);
   const [access, setAccess] = useState<StorageAccess>({
     rootId: 'app',
