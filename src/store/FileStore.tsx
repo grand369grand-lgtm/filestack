@@ -9,7 +9,7 @@ import React, {
 } from 'react';
 import { Alert } from 'react-native';
 import { engine, initCore, engineInfo, type EngineInfo, type Entry, type SortKey } from '../core';
-import { fs, childrenOf } from '../fs';
+import { fs, childrenOf, type StorageAccess, type StorageRoot } from '../fs';
 
 export type ViewMode = 'list' | 'grid';
 
@@ -18,6 +18,15 @@ interface FileStoreValue {
   loading: boolean;
   error: string | null;
   engineInfo: EngineInfo;
+
+  /** Browsable roots and the state of the active one. */
+  roots: StorageRoot[];
+  rootId: string;
+  rootLabel: string;
+  access: StorageAccess;
+  switchRoot: (id: string) => Promise<void>;
+  requestAccess: () => Promise<void>;
+  refreshAccess: () => Promise<void>;
 
   cwd: string;
   setCwd: (path: string) => void;
@@ -63,6 +72,12 @@ export function FileStoreProvider({ children: node }: { children: React.ReactNod
   const [selection, setSelection] = useState<string[]>([]);
   const [stars, setStars] = useState<Record<string, boolean>>({});
   const [info, setInfo] = useState<EngineInfo>({ engine: 'js', version: '0.1.0' });
+  const [roots, setRoots] = useState<StorageRoot[]>([]);
+  const [access, setAccess] = useState<StorageAccess>({
+    rootId: 'app',
+    granted: true,
+    canRequest: false,
+  });
 
   const mounted = useRef(true);
   useEffect(() => {
@@ -100,9 +115,38 @@ export function FileStoreProvider({ children: node }: { children: React.ReactNod
     (async () => {
       const engineMeta = await initCore();
       if (mounted.current) setInfo(engineMeta);
+      try {
+        const available = await fs.roots();
+        if (mounted.current) setRoots(available);
+        const current = await fs.access();
+        if (mounted.current) setAccess(current);
+      } catch {
+        /* roots are cosmetic; the scan below reports real failures */
+      }
       await refresh();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const switchRoot = useCallback(
+    async (id: string) => {
+      if (id === access.rootId) return;
+      await fs.setRoot(id);
+      setCwd('/');
+      setSelection([]);
+      setAccess(await fs.access());
+      await refresh();
+    },
+    [access.rootId, refresh],
+  );
+
+  const refreshAccess = useCallback(async () => {
+    setAccess(await fs.access());
+    await refresh();
+  }, [refresh]);
+
+  const requestAccess = useCallback(async () => {
+    await fs.requestAccess();
   }, []);
 
   const children = useMemo(() => childrenOf(entries, cwd), [entries, cwd]);
@@ -130,16 +174,21 @@ export function FileStoreProvider({ children: node }: { children: React.ReactNod
     };
   }, [children, sortKey, sortDesc, dirsFirst, info.engine]);
 
+  const rootLabel = useMemo(
+    () => roots.find((r) => r.id === access.rootId)?.label ?? 'Home',
+    [roots, access.rootId],
+  );
+
   const breadcrumbs = useMemo(() => {
     const parts = cwd.split('/').filter(Boolean);
-    const crumbs = [{ name: 'Home', path: '/' }];
+    const crumbs = [{ name: rootLabel, path: '/' }];
     let acc = '';
     for (const p of parts) {
       acc += `/${p}`;
       crumbs.push({ name: p, path: acc });
     }
     return crumbs;
-  }, [cwd]);
+  }, [cwd, rootLabel]);
 
   const sortWithRust = useCallback(async (key: SortKey, desc: boolean) => {
     return engine().sort({ entries: childrenOf(entries, cwd), key, descending: desc, dirs_first: dirsFirst });
@@ -214,6 +263,13 @@ export function FileStoreProvider({ children: node }: { children: React.ReactNod
     loading,
     error,
     engineInfo: info,
+    roots,
+    rootId: access.rootId,
+    rootLabel,
+    access,
+    switchRoot,
+    requestAccess,
+    refreshAccess,
     cwd,
     setCwd: (p) => {
       setCwd(p);

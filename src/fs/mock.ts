@@ -4,7 +4,14 @@
  * 30+ files across 12 categories, deliberate duplicates and stale files.
  */
 import type { Entry } from '../core/types';
-import { baseName, dirOf, joinPath, type FsProvider } from './provider';
+import {
+  baseName,
+  dirOf,
+  joinPath,
+  type FsProvider,
+  type StorageAccess,
+  type StorageRoot,
+} from './provider';
 
 const DAY = 86_400_000;
 const now = Date.now();
@@ -173,6 +180,22 @@ class MockFs implements FsProvider {
     }
     for (const m of moved) this.put(m);
     return next;
+  }
+
+  async roots(): Promise<StorageRoot[]> {
+    return [{ id: 'app', label: 'Demo storage' }];
+  }
+
+  async setRoot(_id: string): Promise<void> {
+    // The browser demo exposes a single synthetic root.
+  }
+
+  async access(): Promise<StorageAccess> {
+    return { rootId: 'app', granted: true, canRequest: false };
+  }
+
+  async requestAccess(): Promise<void> {
+    // Browsers have no OS-level storage permission to grant.
   }
 
   async importFiles(): Promise<Entry[]> {

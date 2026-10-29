@@ -22,8 +22,10 @@ export default function FilesScreen({ onSearchHere }: { onSearchHere: (dir: stri
     sortKey, sortDesc, dirsFirst, setDirsFirst, setSort, viewMode, setViewMode,
     selection, isSelecting, toggleSelect, clearSelection, selectAll,
     createFolder, removePaths, renamePath, importFiles, toggleStar, refresh,
+    roots, rootId, rootLabel, access, switchRoot, requestAccess, refreshAccess,
   } = useFiles();
 
+  const [rootsOpen, setRootsOpen] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
   const [renaming, setRenaming] = useState<Entry | null>(null);
   const [preview, setPreview] = useState<{ entry: Entry; text: string | null } | null>(null);
@@ -65,13 +67,12 @@ export default function FilesScreen({ onSearchHere }: { onSearchHere: (dir: stri
         }
       />
 
-      {/* breadcrumbs */}
+      {/* storage root + breadcrumbs */}
       <View style={styles.crumbBar}>
-        {cwd !== '/' ? (
-          <Pressable onPress={() => setCwd('/')} hitSlop={8} style={styles.homeBtn}>
-            <Icon name="home" size={15} color={colors.textDim} />
-          </Pressable>
-        ) : null}
+        <Pressable onPress={() => setRootsOpen(true)} hitSlop={8} style={styles.rootPill}>
+          <Icon name={rootId === 'app' ? 'home' : 'folder'} size={13} color={colors.accent} />
+          <Text style={styles.rootPillText} numberOfLines={1}>{rootLabel}</Text>
+        </Pressable>
         <FlatList
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -98,6 +99,24 @@ export default function FilesScreen({ onSearchHere }: { onSearchHere: (dir: stri
           <Icon name="search" size={15} color={colors.accent} />
         </Pressable>
       </View>
+
+      {access.granted ? null : (
+        <View style={styles.accessBanner}>
+          <Icon name="folder" size={16} color={colors.accent} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.accessTitle}>All-files access needed</Text>
+            <Text style={styles.accessBody} numberOfLines={2}>
+              {access.reason ?? 'Grant storage access to browse this device.'}
+            </Text>
+          </View>
+          <Pressable onPress={requestAccess} style={styles.accessCta}>
+            <Text style={styles.accessCtaText}>Grant</Text>
+          </Pressable>
+          <Pressable onPress={refreshAccess} hitSlop={8} style={styles.homeBtn}>
+            <Icon name="check" size={15} color={colors.textDim} />
+          </Pressable>
+        </View>
+      )}
 
       {isSelecting ? (
         <View style={styles.selectionBar}>
@@ -254,6 +273,37 @@ export default function FilesScreen({ onSearchHere }: { onSearchHere: (dir: stri
         ) : null}
       </Sheet>
 
+      <Sheet visible={rootsOpen} onClose={() => setRootsOpen(false)} title="Storage">
+        {roots.map((r) => (
+          <Pressable
+            key={r.id}
+            onPress={() => {
+              setRootsOpen(false);
+              switchRoot(r.id);
+            }}
+            style={styles.rootRow}
+          >
+            <Icon
+              name={r.id === 'app' ? 'home' : 'folder'}
+              size={18}
+              color={rootId === r.id ? colors.accent : colors.textDim}
+            />
+            <Text style={[styles.rootRowText, rootId === r.id && { color: colors.accent }]}>
+              {r.label}
+            </Text>
+            {rootId === r.id ? <Icon name="check" size={16} color={colors.accent} /> : null}
+          </Pressable>
+        ))}
+        {access.canRequest ? (
+          <Pressable style={styles.grantBtn} onPress={requestAccess}>
+            <Text style={styles.grantText}>Open “All files access” settings</Text>
+          </Pressable>
+        ) : null}
+        <Pressable style={styles.recheckBtn} onPress={refreshAccess}>
+          <Text style={styles.recheckText}>Recheck access</Text>
+        </Pressable>
+      </Sheet>
+
       <FolderPrompt
         visible={newFolder}
         onClose={() => setNewFolder(false)}
@@ -337,6 +387,64 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
   },
+  rootPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: 150,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent + '55',
+  },
+  rootPillText: { color: colors.text, fontSize: 12, fontWeight: '700' },
+  accessBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent + '66',
+  },
+  accessTitle: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  accessBody: { color: colors.textFaint, fontSize: 11.5, marginTop: 2 },
+  accessCta: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.md,
+    backgroundColor: colors.accent,
+  },
+  accessCtaText: { color: colors.bg, fontSize: 12, fontWeight: '700' },
+  rootRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+  },
+  rootRowText: { flex: 1, color: colors.text, fontSize: 14, fontWeight: '600' },
+  grantBtn: {
+    paddingVertical: 12,
+    borderRadius: radius.md,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+  },
+  grantText: { color: colors.bg, fontSize: 13, fontWeight: '700' },
+  recheckBtn: {
+    paddingVertical: 11,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  recheckText: { color: colors.textDim, fontSize: 13, fontWeight: '600' },
   selectionBar: {
     flexDirection: 'row',
     alignItems: 'center',

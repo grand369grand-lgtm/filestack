@@ -133,6 +133,22 @@ jobs:
       - name: Generate Android project
         run: npx expo prebuild --platform android --no-install --clean
 
+      - name: Verify storage permissions in the manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          for permission in MANAGE_EXTERNAL_STORAGE READ_EXTERNAL_STORAGE READ_MEDIA_IMAGES READ_MEDIA_VIDEO READ_MEDIA_AUDIO; do
+            if grep -q "$permission" "$MANIFEST"; then
+              echo "found $permission"
+            else
+              echo "::error::Missing $permission in AndroidManifest.xml"
+              exit 1
+            fi
+          done
+          grep -q 'requestLegacyExternalStorage="true"' "$MANIFEST" \
+            || echo "::warning::requestLegacyExternalStorage is not set on <application>"
+
       - name: Assemble signed release APK
         working-directory: android
         run: ./gradlew --no-daemon --stacktrace :app:assembleRelease

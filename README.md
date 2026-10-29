@@ -13,7 +13,8 @@ The project runs as an Expo web preview with the Rust core compiled to a small, 
 - Natural sorting by name, size, modified time or type; optionally keep folders first.
 - Star favourites; create folders; import, rename and delete files; preview supported text files.
 - Storage insights by category, largest/recent files and duplicate candidates with reclaimable bytes.
-- Demo filesystem on web; app-private documents directory on iOS/Android. No server or cloud upload.
+- Two storage roots on Android: the app's private folder, or the whole device (Downloads, DCIM, WhatsApp, SD card) once you grant "All files access".
+- Demo filesystem on web; app-private documents directory on iOS. No server or cloud upload.
 
 ## Run it
 
@@ -33,7 +34,7 @@ npm run ios           # requires macOS / Xcode
 npm run android       # requires Android Studio / SDK
 ```
 
-When running native, files are limited to the app's private document directory and files explicitly picked by the user. This is intentionally **not** a system-wide Android storage browser; it does not request all-files access.
+On Android the storage pill at the top of the Files screen switches between **App storage** (the private document directory) and **Internal storage** (`/storage/emulated/0`, plus any SD card). Reading the real device needs the `MANAGE_EXTERNAL_STORAGE` permission — Android calls it "All files access" and only lets the user grant it from system settings, so the app shows a banner that opens that screen. Writes, renames and deletes follow the active root. See [`docs/android-storage.md`](docs/android-storage.md) for the permission list and the Google Play declaration this requires. On iOS the app stays inside its document directory.
 
 ## Android APK release (without EAS)
 

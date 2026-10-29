@@ -1,8 +1,25 @@
 import type { Entry } from '../core/types';
 
+/** A place the app can browse. Switching roots keeps paths relative. */
+export interface StorageRoot {
+  id: string;
+  label: string;
+  /** True when the root needs an OS permission before it can be listed. */
+  restricted?: boolean;
+}
+
+/** Whether the active root can actually be read right now. */
+export interface StorageAccess {
+  rootId: string;
+  granted: boolean;
+  /** True when the OS screen for granting access can be opened. */
+  canRequest: boolean;
+  reason?: string;
+}
+
 /**
  * The filesystem surface the app needs. Two implementations:
- *   device.ts — real files in the app's sandbox (expo-file-system)
+ *   device.ts — real files on the phone (expo-file-system)
  *   mock.ts   — a seeded demo tree so the UI is fully explorable in a browser
  */
 export interface FsProvider {
@@ -17,6 +34,15 @@ export interface FsProvider {
   rename(path: string, nextName: string): Promise<string>;
   /** Opens the platform picker and imports the chosen files. */
   importFiles(): Promise<Entry[]>;
+
+  /** Browsable roots: app sandbox, and on Android the shared device storage. */
+  roots(): Promise<StorageRoot[]>;
+  /** Switches the active root; all paths are relative to it. */
+  setRoot(id: string): Promise<void>;
+  /** Checks the active root is readable and whether access can be requested. */
+  access(): Promise<StorageAccess>;
+  /** Opens the OS screen where the user grants all-files access. */
+  requestAccess(): Promise<void>;
 }
 
 export const dirOf = (path: string): string => {

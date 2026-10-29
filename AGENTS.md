@@ -1,7 +1,7 @@
 # FileStack contributor notes
 
 - UI: Expo SDK 58 / React Native. Navigation is the small tab shell in `App.tsx`; this project does not use Expo Router.
-- File access stays behind `src/fs/FsProvider`. The web build uses synthetic demo files; native builds use the app-private document directory and explicit document-picker imports.
+- File access stays behind `src/fs/FsProvider`. The web build uses synthetic demo files; native builds use the app-private document directory plus, on Android, the shared `/storage/emulated/0` root behind the all-files-access permission. Paths are always relative to the active root, so switching roots must not leak into the screens or the Rust core.
 - Core algorithms live in `rust/src/lib.rs`. Keep the TypeScript mirror in `src/core/fallback.ts` in sync and run `npm test` after changes. `npm test` builds the Rust WASM target and runs the cross-engine parity suite.
 - If Rust changes, regenerate `src/core/filecore.generated.ts` with `npm run core` and include that generated source file in the commit.
 - Typecheck with `npm run typecheck`. `CI=1 npx expo export --platform web` validates the web bundle.

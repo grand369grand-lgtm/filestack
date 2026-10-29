@@ -9,7 +9,7 @@
     "ios": {
       "supportsTablet": true
     },
-    "plugins": ["./plugins/withAndroidReleaseSigning"],
+    "plugins": ["./plugins/withAndroidReleaseSigning", "./plugins/withAndroidStorageAccess"],
     "android": {
       "package": "in.crossberry.filestack",
       "adaptiveIcon": {

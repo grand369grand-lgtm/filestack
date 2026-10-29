@@ -16,7 +16,7 @@
 
 ## Filesystem boundary
 
-The UI depends on `FsProvider`, not Expo APIs directly. `src/fs/mock.ts` supplies a seeded tree for web previews, including nested projects, duplicate candidates and text fixtures. `src/fs/device.ts` uses Expo FileSystem and DocumentPicker on iOS/Android. The device provider is scoped to the app's document directory; an explicit picker import is copied into `/Imports`.
+The UI depends on `FsProvider`, not Expo APIs directly. `src/fs/mock.ts` supplies a seeded tree for web previews, including nested projects, duplicate candidates and text fixtures. `src/fs/device.ts` uses Expo FileSystem and DocumentPicker on iOS/Android. The device provider exposes one or more roots (`roots()`, `setRoot()`, `access()`, `requestAccess()`): the app's document directory on both platforms, and on Android the shared storage once `MANAGE_EXTERNAL_STORAGE` is granted. Paths stay relative to the active root; an explicit picker import is copied into `/Imports` of that root.
 
 ## Core boundary
 
