@@ -165,7 +165,7 @@ jobs:
         with:
           name: FileStack ${{ github.ref_name }}
           generate_release_notes: true
-          append_body: |
+          body: |
             **Signing:** ${{ env.APK_SIGNING_NOTE }}
             **SHA-256:** `${{ env.APK_SHA256 }}` (also in `SHA256SUMS.txt`)
           files: |
