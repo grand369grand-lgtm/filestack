@@ -24,11 +24,14 @@ if [[ -z "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}${ANDROID_HOME:-}" ]]; then
 fi
 
 echo "▸ cargo ndk build (arm64-v8a, armeabi-v7a, x86_64) -> $OUT"
+# cargo-ndk runs `cargo metadata` in the working directory, so build from the
+# crate root rather than passing --manifest-path.
+cd "$ROOT/rust"
 cargo ndk \
   -t arm64-v8a \
   -t armeabi-v7a \
   -t x86_64 \
   -o "$OUT" \
-  build --release --features jni --manifest-path "$ROOT/rust/Cargo.toml"
+  build --release --features jni
 
 ls -l "$OUT"/*/libfilecore.so
