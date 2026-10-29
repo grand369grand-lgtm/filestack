@@ -1,0 +1,39 @@
+{
+  "name": "filestack",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/metro-runtime": "~58.0.15",
+    "expo": "~58.0.21",
+    "expo-document-picker": "~58.0.4",
+    "expo-file-system": "~58.0.13",
+    "expo-status-bar": "~58.0.4",
+    "expo-system-ui": "~58.0.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-svg": "15.16.0",
+    "react-native-web": "^0.21.4"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "core": "node scripts/build-core.mjs",
+    "core:skip": "node scripts/build-core.mjs --skip-build",
+    "test:rust": "cargo test --manifest-path rust/Cargo.toml",
+    "test:core": "node scripts/test-core.mjs",
+    "test": "npm run test:rust && npm run core && npm run test:core",
+    "typecheck": "tsc --noEmit",
+    "export:web": "expo export --platform web"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

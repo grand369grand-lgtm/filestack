@@ -1,0 +1,222 @@
+name: Android APK release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-apk:
+    name: Build signed release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Job-level env so the notification step can test them with `if: env.X != ''`
+    # (secrets cannot be read directly inside a step-level `if`).
+    env:
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-37 build-tools;37.0.0 ndk;27.1.12297006
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Run tests and typecheck
+        run: |
+          npm test
+          npm run typecheck
+
+      - name: Prepare release signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYSTORE="$RUNNER_TEMP/filestack-release.keystore"
+
+          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            for name in ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+              if [[ -z "${!name:-}" ]]; then
+                echo "::error::Missing repository secret: ${name}"
+                exit 1
+              fi
+            done
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+            if [[ ! -s "$KEYSTORE" ]]; then
+              echo "::error::Decoded keystore is empty"
+              exit 1
+            fi
+            STORE_PASS="$ANDROID_KEYSTORE_PASSWORD"
+            ALIAS="$ANDROID_KEY_ALIAS"
+            KEY_PASS="$ANDROID_KEY_PASSWORD"
+            echo "APK_SIGNING_NOTE=Signed with the repository release key." >> "$GITHUB_ENV"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret found. Generating a throwaway keystore so the build still produces an installable APK. Add the four ANDROID_* signing secrets to get a persistent key that can update earlier installs."
+            keytool -genkeypair -noprompt \
+              -keystore "$KEYSTORE" \
+              -alias filestack \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass filestack-ci -keypass filestack-ci \
+              -dname "CN=FileStack CI, OU=CI, O=FileStack, C=IN"
+            STORE_PASS="filestack-ci"
+            ALIAS="filestack"
+            KEY_PASS="filestack-ci"
+            echo "APK_SIGNING_NOTE=Dev-signed with a throwaway CI key (no release signing secrets configured)." >> "$GITHUB_ENV"
+          fi
+
+          {
+            echo "ANDROID_KEYSTORE_FILE=$KEYSTORE"
+            echo "ANDROID_KEYSTORE_PASSWORD=$STORE_PASS"
+            echo "ANDROID_KEY_ALIAS=$ALIAS"
+            echo "ANDROID_KEY_PASSWORD=$KEY_PASS"
+          } >> "$GITHUB_ENV"
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Assemble signed release APK
+        working-directory: android
+        run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Prepare APK and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          mkdir -p release
+          cp "$APK" "release/filestack-${GITHUB_REF_NAME}.apk"
+          cd release
+          sha256sum "filestack-${GITHUB_REF_NAME}.apk" > SHA256SUMS.txt
+          SIZE=$(du -h "filestack-${GITHUB_REF_NAME}.apk" | cut -f1)
+          echo "APK_SIZE=$SIZE" >> "$GITHUB_ENV"
+          echo "APK_SHA256=$(cut -d' ' -f1 SHA256SUMS.txt)" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: filestack-${{ github.ref_name }}-apk
+          path: release/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: FileStack ${{ github.ref_name }}
+          generate_release_notes: true
+          append_body: |
+            **Signing:** ${{ env.APK_SIGNING_NOTE }}
+            **SHA-256:** `${{ env.APK_SHA256 }}` (also in `SHA256SUMS.txt`)
+          files: |
+            release/filestack-${{ github.ref_name }}.apk
+            release/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Email build result
+        if: always() && env.SMTP_USERNAME != '' && env.MAIL_TO != ''
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          APK_SIZE: ${{ env.APK_SIZE }}
+          APK_SHA256: ${{ env.APK_SHA256 }}
+          SIGNING_NOTE: ${{ env.APK_SIGNING_NOTE }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import smtplib
+          import ssl
+          from email.message import EmailMessage
+
+          env = os.environ
+          status = env.get("JOB_STATUS", "unknown")
+          ref = env.get("REF_NAME", "")
+          ok = status == "success"
+          host = env.get("SMTP_HOST") or "smtp.gmail.com"
+          port = int(env.get("SMTP_PORT") or 465)
+          user = env["SMTP_USERNAME"]
+          password = env["SMTP_PASSWORD"]
+          to_addr = env["MAIL_TO"]
+          repo = env.get("REPO", "")
+
+          subject = f"[{repo}] APK build {'succeeded' if ok else 'failed'} - {ref}"
+          lines = [
+              f"FileStack Android build {status}.",
+              "",
+              f"Repository : {repo}",
+              f"Tag / ref  : {ref}",
+              f"Commit     : {env.get('COMMIT_SHA', '')}",
+          ]
+          if ok:
+              lines += [
+                  f"APK        : filestack-{ref}.apk ({env.get('APK_SIZE', 'size unknown')})",
+                  f"SHA-256    : {env.get('APK_SHA256', 'n/a')}",
+                  f"Signing    : {env.get('SIGNING_NOTE', 'n/a')}",
+                  "",
+                  "Download from the GitHub Release:",
+                  env.get("RELEASE_URL", ""),
+              ]
+          lines += ["", "Workflow run:", env.get("RUN_URL", "")]
+          body = "\n".join(lines)
+
+          msg = EmailMessage()
+          msg["From"] = user
+          msg["To"] = to_addr
+          msg["Subject"] = subject
+          msg.set_content(body)
+
+          if port == 465:
+              with smtplib.SMTP_SSL(host, port, context=ssl.create_default_context(), timeout=60) as s:
+                  s.login(user, password)
+                  s.send_message(msg)
+          else:
+              with smtplib.SMTP(host, port, timeout=60) as s:
+                  s.starttls(context=ssl.create_default_context())
+                  s.login(user, password)
+                  s.send_message(msg)
+          print(f"Sent build notification to {to_addr}")
+          PY
