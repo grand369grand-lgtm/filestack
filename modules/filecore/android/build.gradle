@@ -1,0 +1,26 @@
+apply plugin: 'com.android.library'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'expo.modules.filecore'
+version = '0.2.0'
+
+android {
+  namespace "expo.modules.filecore"
+
+  defaultConfig {
+    versionCode 1
+    versionName "0.2.0"
+  }
+
+  // libfilecore.so is produced by `cargo ndk` (see scripts/build-core-android.sh)
+  // and dropped into src/main/jniLibs/<abi>/, which this plugin packages as-is.
+  sourceSets {
+    main {
+      jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+  }
+}
+
+dependencies {
+  // Nothing: the module is a thin JNI wrapper over the Rust cdylib.
+}

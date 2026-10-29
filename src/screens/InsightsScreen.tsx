@@ -56,7 +56,7 @@ export default function InsightsScreen() {
         right={
           <View style={styles.enginePill}>
             <Icon name="cpu" size={13} color={colors.accent} />
-            <Text style={styles.engineText}>{engineInfo.engine === 'wasm' ? 'RUST' : 'JS'}</Text>
+            <Text style={styles.engineText}>RUST</Text>
           </View>
         }
       />
@@ -164,10 +164,7 @@ export default function InsightsScreen() {
       </Section>
 
       <Text style={styles.footer}>
-        computed by filecore v{engineInfo.version} ·{' '}
-        {engineInfo.engine === 'wasm'
-          ? `${(engineInfo.bytes! / 1024).toFixed(0)} KB wasm, 0 host imports`
-          : 'typescript fallback'}
+        computed by filecore v{engineInfo.version} · native rust, jni, no js copy
       </Text>
     </ScrollView>
   );

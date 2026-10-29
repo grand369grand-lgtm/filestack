@@ -6,9 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "ios": {
-      "supportsTablet": true
-    },
+    "platforms": ["android"],
     "plugins": ["./plugins/withAndroidReleaseSigning", "./plugins/withAndroidStorageAccess"],
     "android": {
       "package": "in.crossberry.filestack",
@@ -19,9 +17,6 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
     }
   }
 }

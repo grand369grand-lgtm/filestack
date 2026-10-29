@@ -1,48 +1,93 @@
-# Native Rust bridge status
+# Native Rust core
 
-## What works today
+FileStack's compute and filesystem work runs in Rust, inside the app process.
+There is no WebAssembly build and no TypeScript copy of the algorithms: the
+Rust library is the only implementation, and the app talks to it over JNI.
 
-- **Expo web:** the UI loads `filecore.wasm`, compiled from `rust/`. Rust performs the live search, directory sort, storage insights, duplicate detection and size formatting.
-- **iOS / Android Expo:** the same `CoreApi` shape currently selects `fallbackCore` (TypeScript) on Hermes. This keeps the managed Expo app fully usable without a native Rust module. The Rust and TypeScript algorithms are parity-tested.
-- **Rust library:** builds as both `cdylib` and `rlib`. `rust/src/ffi.rs` exports a compact C ABI (`fc_invoke_json` / `fc_free_json`) for native wrappers as well as the WASM ABI.
+## Pieces
 
-The native UI is not silently described as running Rust: its status badge shows `core: typescript` until a native module is registered.
+| Piece | What it is |
+| --- | --- |
+| `rust/src/lib.rs` | search ranking, query parsing, sorting, insights, duplicates, size formatting |
+| `rust/src/fsops.rs` | directory walking, text reads, mkdir / rename / copy / delete / exists |
+| `rust/src/ffi.rs` | JSON envelope + the C ABI (`fc_invoke_json` / `fc_free_json`) kept for a future iOS build |
+| `rust/src/jni_bridge.rs` | the one JNI symbol Android calls, built with `--features jni` |
+| `modules/filecore` | Expo module: Kotlin wrapper, `jniLibs` for the `.so`, `index.ts` for JS |
+| `src/core/native.ts` | the only JS door into the core |
 
-## Why a native module is separate work
+## Protocol
 
-Expo Go and the managed Hermes runtime cannot load an arbitrary Rust `.so`/`.a` on their own. Native Rust on-device needs an Expo module plus platform build artifacts:
-
-- Android: compile `filecore` for the supported Android ABIs and package the resulting shared library; expose a Kotlin `Function` that calls the JNI/C bridge.
-- iOS: compile device and simulator slices into an XCFramework; call the C ABI from a Swift Expo module.
-- JS: adapt that Expo module to `CoreApi` and select it in `src/core/index.ts` before the TypeScript fallback.
-
-That requires a custom development client / EAS build (not Expo Go). The app's filesystem provider remains independent of this bridge.
-
-## C ABI contract
-
-`fc_invoke_json` accepts UTF-8 JSON with the same envelope used by WASM:
+Every call is one JSON envelope in, one JSON envelope out:
 
 ```json
-{"op":"search","payload":{"entries":[],"query":"type:image"}}
+{"op":"scan","payload":{"root":"/storage/emulated/0","max_depth":10,"max_entries":25000}}
+{"ok":true,"data":[{"id":"/DCIM","name":"DCIM","path":"/DCIM","kind":"dir","size":0,"mtime":1750000000000,"starred":false}]}
 ```
 
-It returns an allocated UTF-8 JSON envelope (`{"ok":true,"data":...}` or `{"ok":false,"error":"..."}`) and writes its byte length through `out_len`. The returned allocation must be released with `fc_free_json(ptr, len)`. The library does not retain request data.
+On failure: `{"ok":false,"error":"..."}`. The JS side throws that message, so a
+missing permission or an unreadable folder shows up as a normal error instead of
+a crash.
 
-Supported operations: `search`, `sort`, `insights`, `duplicates`, `formatSize`, `ping`.
+Operations: `search`, `sort`, `insights`, `duplicates`, `formatSize`, `ping`,
+`scan`, `read_text`, `mkdir`, `remove`, `rename`, `copy`, `exists`.
 
-## Build a native Rust library
+## Two entry points, on purpose
 
-Install the Android or iOS Rust targets for the host you build on, then compile the crate:
+- `invoke` — synchronous, on the JS thread. Used for search, sort, insights,
+  duplicates and ping: the answer is needed immediately and the call is cheap.
+- `invokeAsync` — background thread, returns a Promise. Used for every
+  filesystem operation so a slow directory walk never blocks the UI.
+
+## Why the filesystem moved into Rust
+
+The app used to call `expo-file-system` once per entry while walking a tree.
+On a phone with 20 000 files that is 20 000 round trips through the JS bridge
+before the first screen renders. Now `scan` is a single call: `std::fs` walks
+the tree in Rust and returns one JSON array. The walk is capped (25 000 entries,
+depth 10) and skips `Android/data`, `Android/obb`, `.thumbnails` and `LOST.DIR`.
+
+## Building the library
+
+Local machine:
 
 ```sh
-# Android (install cargo-ndk separately; Android NDK required)
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --release --manifest-path rust/Cargo.toml
-
-# iOS (requires macOS + Xcode)
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-cargo build --release --manifest-path rust/Cargo.toml --target aarch64-apple-ios
-cargo build --release --manifest-path rust/Cargo.toml --target aarch64-apple-ios-sim
+cargo install cargo-ndk
+export ANDROID_NDK_HOME=/path/to/android-sdk/ndk/27.1.12297006
+npm run core:android        # -> modules/filecore/android/src/main/jniLibs/<abi>/libfilecore.so
+npx expo prebuild --platform android --clean
+npx expo run:android
 ```
 
-These commands produce the Rust libraries; the Expo module and platform packaging are still required before enabling native Rust in the app.
+`npm run core:android` is `scripts/build-core-android.sh`; it runs
+`cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 build --release --features jni`.
+
+The `.so` files are **not** committed (see `.gitignore`). CI builds them on every
+release, and the workflow fails if the APK does not contain
+`lib/arm64-v8a/libfilecore.so`.
+
+## Tests
+
+`npm test` runs `cargo test`, which covers the algorithms and the new filesystem
+operations (walking a nested temp tree, the entry cap, text reads, mkdir / copy /
+rename / remove). There is no JS engine to compare against any more, so the old
+parity suite is gone.
+
+## Keeping the bridge intact
+
+The JNI symbol is derived from the Kotlin class name:
+
+```
+Java_expo_modules_filecore_FileCoreNative_invoke   (rust/src/jni_bridge.rs)
+expo.modules.filecore.FileCoreNative.invoke        (modules/filecore/.../FileCoreNative.kt)
+```
+
+Rename either side and the app fails at runtime with `UnsatisfiedLinkError`.
+`System.loadLibrary("filecore")` finds `libfilecore.so` inside the APK, so the
+file name and the library name must stay `filecore`.
+
+## iOS
+
+Not built. The C ABI in `ffi.rs` is still exported for the day an XCFramework is
+wired into a Swift Expo module; until then the app targets Android only
+(`expo.platforms` in `app.json`).

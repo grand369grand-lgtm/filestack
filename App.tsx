@@ -45,8 +45,7 @@ function EngineBadge() {
     <View style={styles.badge}>
       <Icon name="cpu" size={11} color={colors.accent} />
       <Text style={styles.badgeText}>
-        {engineInfo.engine === 'wasm' ? 'core: rust/wasm' : 'core: typescript'} · v
-        {engineInfo.version}
+        core: rust · jni · v{engineInfo.version}
       </Text>
     </View>
   );

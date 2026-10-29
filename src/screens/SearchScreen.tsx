@@ -86,7 +86,7 @@ export default function SearchScreen() {
     <View style={styles.flex}>
       <ScreenHeader
         title="Search"
-        subtitle={`${engineInfo.engine === 'wasm' ? `rust · wasm ${(engineInfo.bytes! / 1024).toFixed(0)} KB` : 'typescript engine'} · sha ${engineInfo.sha256?.slice(0, 8) ?? '—'}`}
+        subtitle={`rust · jni v${engineInfo.version} · ranked natively`}
       />
 
       <View style={styles.searchWrap}>

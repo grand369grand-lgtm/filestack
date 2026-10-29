@@ -1,15 +1,21 @@
 [package]
 name = "filecore"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Native search / sort / indexing core for the Filestack file manager (Expo + Rust)"
+description = "Native search / sort / filesystem core for the Filestack file manager (Expo + Rust)"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# Builds the JNI entry points used by modules/filecore on Android.
+jni = ["dep:jni"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+jni = { version = "0.21", optional = true }
 
 [profile.release]
 opt-level = "z"

@@ -1,50 +1,37 @@
 /**
- * Engine selection.
+ * The app's compute engine: the Rust core, reached over JNI.
  *
- *   wasm   — Rust core (web / any JS runtime with WebAssembly)
- *   js     — TypeScript mirror (Hermes without the native cdylib)
- *
- * Both return identical shapes, so screens import only from here.
+ * Rust owns search ranking, query parsing, sorting, insights, duplicate
+ * detection and the whole filesystem walk. `display.ts` keeps only the tiny
+ * render-time string helpers; there is no JavaScript mirror of these
+ * algorithms and no WebAssembly build any more.
  */
-import { fallbackCore } from './fallback';
-import { wasmAvailable, wasmCore, fileCoreMeta } from './wasm';
+import { callNative } from './native';
 import type { CoreApi } from './types';
 
-export { fallbackCore, wasmCore, fileCoreMeta };
 export * from './types';
-
-// Synchronous display helpers. These are the TypeScript mirror; their output is
-// pinned to the Rust implementation by `npm run test:core` (parity suite).
-export { formatSize, categoryOf, extOf, fuzzy } from './fallback';
+export { formatSize, categoryOf, extOf } from './display';
 
 export interface EngineInfo {
-  engine: 'wasm' | 'js';
+  engine: 'rust';
   version: string;
-  bytes?: number;
-  sha256?: string;
 }
 
-let core: CoreApi = fallbackCore;
-let info: EngineInfo = { engine: 'js', version: '0.1.0' };
+let info: EngineInfo = { engine: 'rust', version: '0.0.0' };
 
+export const core: CoreApi = {
+  search: async (req) => callNative('search', req),
+  sort: async (req) => callNative('sort', req),
+  insights: async (req) => callNative('insights', req),
+  duplicates: async (entries) => callNative('duplicates', entries),
+  formatSize: async (bytes) => callNative('formatSize', bytes),
+  ping: async () => callNative('ping', null),
+};
+
+/** Pings the native core so the UI can show which build it is running. */
 export async function initCore(): Promise<EngineInfo> {
-  if (wasmAvailable()) {
-    try {
-      const ping = await wasmCore.ping();
-      core = wasmCore;
-      info = {
-        engine: 'wasm',
-        version: ping.version,
-        bytes: fileCoreMeta.bytes,
-        sha256: fileCoreMeta.sha256,
-      };
-      return info;
-    } catch (err) {
-      if (__DEV__) console.warn('[filecore] wasm unavailable, using TS engine:', err);
-    }
-  }
-  const ping = await fallbackCore.ping();
-  info = { engine: 'js', version: ping.version };
+  const ping = await core.ping();
+  info = { engine: 'rust', version: ping.version };
   return info;
 }
 

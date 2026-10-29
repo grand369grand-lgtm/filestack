@@ -1,19 +1,19 @@
 /**
- * Real-device filesystem.
+ * Real-device filesystem, entirely in Rust.
  *
- * Two roots on Android:
+ * The app used to walk directories from JavaScript, one expo-file-system call
+ * per entry — that is what made a big phone feel slow. Now a single
+ * `scan` request crosses into `rust/src/fsops.rs`, which walks the tree with
+ * `std::fs` and returns the whole listing as one JSON array. Reading, creating,
+ * renaming, copying and deleting are native calls too.
+ *
+ * Roots:
  *   app    — the app's private document directory, no permission needed
- *   shared — /storage/emulated/0 (plus any SD card volume), which needs the
- *            "All files access" permission (MANAGE_EXTERNAL_STORAGE) on
- *            Android 11+, or READ/WRITE_EXTERNAL_STORAGE on older releases.
+ *   shared — /storage/emulated/0 (plus SD card volumes), needs "All files
+ *            access" (MANAGE_EXTERNAL_STORAGE) on Android 11+
  *
- * Paths handed to the UI are always relative to the active root, so switching
- * between the sandbox and the real device storage does not change any of the
- * screens, the search core or the insights maths.
- *
- * Uses the stable legacy expo-file-system API on purpose: it behaves the same
- * on iOS, Android and the New Architecture, and the newer `File`/`Directory`
- * classes can still be adopted later behind this same FsProvider interface.
+ * Paths handed to the UI are relative to the active root; Rust gets absolute
+ * POSIX paths.
  */
 import Constants from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
@@ -21,6 +21,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import { Linking, Platform } from 'react-native';
 import type { Entry } from '../core/types';
+import { callNativeAsync } from '../core/native';
 import {
   baseName,
   dirOf,
@@ -30,61 +31,54 @@ import {
   type StorageRoot,
 } from './provider';
 
-const appRootUri = (): string => FileSystem.documentDirectory ?? 'file:///';
-const SHARED_PRIMARY = 'file:///storage/emulated/0/';
-
-const MAX_DEPTH = 10;
-/** Stop before a full device scan turns into a multi-minute stall. */
+const SHARED_PRIMARY = '/storage/emulated/0';
 const MAX_ENTRIES = 25_000;
+const MAX_TEXT_BYTES = 512 * 1024;
+
 const TEXT_EXT = new Set([
   'txt', 'md', 'json', 'csv', 'ts', 'tsx', 'js', 'jsx', 'rs', 'toml', 'yml', 'yaml',
   'html', 'css', 'xml', 'log', 'ini', 'sh', 'py',
 ]);
 
+/** Directories that are never useful to walk, and are often unreadable anyway. */
+const SKIP_PREFIXES = ['/Android/data', '/Android/obb'];
+
 /** Volumes discovered under /storage (SD cards, USB drives). */
-const volumeUris: Record<string, string> = {};
+const volumePaths: Record<string, string> = {};
 
 let activeId = 'app';
 
-const rootUri = (): string => {
-  if (activeId === 'app') return appRootUri();
-  return volumeUris[activeId] ?? SHARED_PRIMARY;
+const uriToPath = (uri: string): string =>
+  decodeURIComponent(uri.replace(/^file:\/\//, '')).replace(/\/+$/, '');
+
+const appRootPath = (): string => uriToPath(FileSystem.documentDirectory ?? 'file:///');
+
+const rootPath = (): string => {
+  if (activeId === 'app') return appRootPath();
+  return volumePaths[activeId] ?? SHARED_PRIMARY;
+};
+
+/** `/DCIM/a.jpg` -> `/storage/emulated/0/DCIM/a.jpg` */
+const toPath = (rel: string): string => {
+  const root = rootPath();
+  return rel === '/' ? root : `${root}${rel.startsWith('/') ? rel : `/${rel}`}`;
 };
 
 /** Can the app list this directory right now? */
-const isReadable = async (uri: string): Promise<boolean> => {
+const isReadable = async (path: string): Promise<boolean> => {
   try {
-    await FileSystem.readDirectoryAsync(uri);
+    // depth 1 so the call really lists the directory: `metadata` alone can
+    // succeed on a folder the app is not allowed to enumerate.
+    await callNativeAsync<Entry[]>('scan', {
+      root: path,
+      max_depth: 1,
+      max_entries: 1,
+      skip: [],
+    });
     return true;
   } catch {
     return false;
   }
-};
-
-/** `file:///storage/emulated/0/DCIM/a.jpg` -> `/DCIM/a.jpg` */
-const toRel = (uri: string): string => {
-  const root = rootUri();
-  const rel = decodeURIComponent(uri.slice(root.length - 1));
-  return rel.startsWith('/') ? rel : `/${rel}`;
-};
-
-const toUri = (rel: string): string => rootUri() + rel.replace(/^\/+/, '');
-
-const nameFromUri = (uri: string): string => {
-  const trimmed = uri.replace(/\/+$/, '');
-  const raw = trimmed.slice(trimmed.lastIndexOf('/') + 1);
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-};
-
-/** Folders that are never useful to walk, and are often unreadable anyway. */
-const skipDir = (rel: string, name: string): boolean => {
-  if (rel === '/Android' && (name === 'data' || name === 'obb')) return true;
-  if (name === '.thumbnails' || name === 'LOST.DIR') return true;
-  return false;
 };
 
 class DeviceFs implements FsProvider {
@@ -92,27 +86,31 @@ class DeviceFs implements FsProvider {
 
   async ensureRoot(): Promise<void> {
     if (activeId !== 'app') return;
-    const root = appRootUri();
-    const info = await FileSystem.getInfoAsync(root);
-    if (!info.exists) await FileSystem.makeDirectoryAsync(root, { intermediates: true });
+    await callNativeAsync<Entry>('mkdir', { path: appRootPath() });
   }
 
   async roots(): Promise<StorageRoot[]> {
     const list: StorageRoot[] = [{ id: 'app', label: 'App storage' }];
     if (Platform.OS !== 'android') return list;
 
-    volumeUris.shared = SHARED_PRIMARY;
+    volumePaths.shared = SHARED_PRIMARY;
     list.push({ id: 'shared', label: 'Internal storage', restricted: true });
 
     // Secondary volumes (SD cards) live beside `emulated` under /storage.
     try {
-      const volumes = await FileSystem.readDirectoryAsync('file:///storage/');
+      const volumes = await callNativeAsync<Entry[]>('scan', {
+        root: '/storage',
+        max_depth: 1,
+        max_entries: 50,
+        skip: [],
+      });
       for (const volume of volumes) {
-        if (volume === 'emulated' || volume === 'self') continue;
-        const uri = `file:///storage/${volume}/`;
-        if (!(await isReadable(uri))) continue;
-        volumeUris[`vol:${volume}`] = uri;
-        list.push({ id: `vol:${volume}`, label: `SD card (${volume})`, restricted: true });
+        if (volume.kind !== 'dir') continue;
+        if (volume.name === 'emulated' || volume.name === 'self') continue;
+        const path = `/storage/${volume.name}`;
+        if (!(await isReadable(path))) continue;
+        volumePaths[`vol:${volume.name}`] = path;
+        list.push({ id: `vol:${volume.name}`, label: `SD card (${volume.name})`, restricted: true });
       }
     } catch {
       /* no extra volumes */
@@ -122,14 +120,14 @@ class DeviceFs implements FsProvider {
 
   async setRoot(id: string): Promise<void> {
     activeId = id;
-    if (id !== 'app') volumeUris[id] = volumeUris[id] ?? SHARED_PRIMARY;
+    if (id !== 'app') volumePaths[id] = volumePaths[id] ?? SHARED_PRIMARY;
   }
 
   async access(): Promise<StorageAccess> {
     if (activeId === 'app') {
       return { rootId: activeId, granted: true, canRequest: false };
     }
-    const granted = await isReadable(rootUri());
+    const granted = await isReadable(rootPath());
     return {
       rootId: activeId,
       granted,
@@ -166,68 +164,37 @@ class DeviceFs implements FsProvider {
 
   async scan(): Promise<Entry[]> {
     await this.ensureRoot();
-    const out: Entry[] = [];
-    const walk = async (uri: string, depth: number): Promise<void> => {
-      if (depth > MAX_DEPTH || out.length >= MAX_ENTRIES) return;
-      let names: string[] = [];
-      try {
-        names = await FileSystem.readDirectoryAsync(uri);
-      } catch {
-        return;
-      }
-      for (const name of names) {
-        if (out.length >= MAX_ENTRIES) return;
-        const childUri = `${uri}${uri.endsWith('/') ? '' : '/'}${name}`;
-        const rel = toRel(childUri);
-        if (skipDir(rel, name)) continue;
-        try {
-          const info = await FileSystem.getInfoAsync(childUri);
-          if (!info.exists) continue;
-          const isDir = info.isDirectory === true;
-          out.push({
-            id: rel,
-            name: nameFromUri(childUri),
-            path: rel,
-            kind: isDir ? 'dir' : 'file',
-            size: isDir ? 0 : (info.size ?? 0),
-            mtime: info.modificationTime ? Math.round(info.modificationTime * 1000) : Date.now(),
-          });
-          if (isDir) await walk(childUri, depth + 1);
-        } catch {
-          /* unreadable child: skip */
-        }
-      }
-    };
-    await walk(rootUri(), 0);
-    return out;
+    return callNativeAsync<Entry[]>('scan', {
+      root: rootPath(),
+      max_depth: activeId === 'app' ? 8 : 10,
+      max_entries: MAX_ENTRIES,
+      skip: SKIP_PREFIXES,
+    });
   }
 
   async readText(path: string): Promise<string> {
     const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase();
     if (!TEXT_EXT.has(ext)) throw new Error('No text preview for this file type');
-    const info = await FileSystem.getInfoAsync(toUri(path));
-    if (info.exists && (info.size ?? 0) > 512 * 1024) throw new Error('File too large to preview');
-    return FileSystem.readAsStringAsync(toUri(path), {
-      encoding: FileSystem.EncodingType.UTF8,
+    return callNativeAsync<string>('read_text', {
+      path: toPath(path),
+      max_bytes: MAX_TEXT_BYTES,
     });
   }
 
   async mkdir(dir: string, name: string): Promise<Entry> {
     const rel = joinPath(dir, name);
-    await FileSystem.makeDirectoryAsync(toUri(rel), { intermediates: true });
-    return { id: rel, name, path: rel, kind: 'dir', size: 0, mtime: Date.now() };
+    const created = await callNativeAsync<Entry>('mkdir', { path: toPath(rel) });
+    return { ...created, id: rel, path: rel };
   }
 
   async remove(paths: string[]): Promise<void> {
-    for (const p of paths) {
-      await FileSystem.deleteAsync(toUri(p), { idempotent: true });
-    }
+    await callNativeAsync<number>('remove', { paths: paths.map(toPath) });
   }
 
   async rename(path: string, nextName: string): Promise<string> {
     const next = joinPath(dirOf(path), nextName);
     if (next === path) return path;
-    await FileSystem.moveAsync({ from: toUri(path), to: toUri(next) });
+    await callNativeAsync<string>('rename', { from: toPath(path), to: toPath(next) });
     return next;
   }
 
@@ -240,24 +207,27 @@ class DeviceFs implements FsProvider {
     });
     if (result.canceled) return [];
 
+    await callNativeAsync<Entry>('mkdir', { path: toPath('/Imports') });
+
     const created: Entry[] = [];
     for (const asset of result.assets) {
       const name = asset.name ?? baseName(asset.uri);
       let target = `/Imports/${name}`;
       let n = 1;
-      while ((await FileSystem.getInfoAsync(toUri(target))).exists) {
+      while (await callNativeAsync<boolean>('exists', { path: toPath(target) })) {
         target = `/Imports/${name.replace(/(\.[^.]+)?$/, ` (${n})$1`)}`;
         n += 1;
       }
-      await FileSystem.makeDirectoryAsync(toUri('/Imports'), { intermediates: true });
-      await FileSystem.copyAsync({ from: asset.uri, to: toUri(target) });
-      const info = await FileSystem.getInfoAsync(toUri(target));
+      await callNativeAsync<number>('copy', {
+        from: uriToPath(asset.uri),
+        to: toPath(target),
+      });
       created.push({
         id: target,
         name: baseName(target),
         path: target,
         kind: 'file',
-        size: info.exists ? (info.size ?? asset.size ?? 0) : (asset.size ?? 0),
+        size: asset.size ?? 0,
         mtime: Date.now(),
       });
     }

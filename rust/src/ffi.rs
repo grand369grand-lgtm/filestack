@@ -12,7 +12,10 @@ use crate::invoke;
 use std::cell::RefCell;
 
 /// Convert the shared JSON request envelope into a JSON response envelope.
-fn dispatch_json(text: &str) -> String {
+///
+/// Shared by every entry point: the C ABI below and the JNI bridge in
+/// `jni_bridge.rs`.
+pub(crate) fn dispatch_json(text: &str) -> String {
     match serde_json::from_str::<serde_json::Value>(text) {
         Ok(v) => {
             let op = v.get("op").and_then(|o| o.as_str()).unwrap_or("").to_string();

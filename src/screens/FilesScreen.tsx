@@ -55,7 +55,7 @@ export default function FilesScreen({ onSearchHere }: { onSearchHere: (dir: stri
     <View style={styles.flex}>
       <ScreenHeader
         title="Files"
-        subtitle={`${engineInfo.engine === 'wasm' ? 'rust · wasm' : 'js engine'} · ${sortedChildren.length} items`}
+        subtitle={`rust · jni v${engineInfo.version} · ${sortedChildren.length} items`}
         right={
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <IconButton

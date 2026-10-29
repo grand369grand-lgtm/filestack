@@ -65,14 +65,21 @@ jobs:
 
           yes | "$SDKM" --licenses > /dev/null 2>&1 || true
           # Expo SDK 58 compiles against API 36 (compileSdk/targetSdk), minSdk 24.
-          # Anything else the generated project asks for is fetched by Gradle's
-          # own SDK auto-download.
-          "$SDKM" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          # The NDK is needed to cross-compile the Rust core.
+          "$SDKM" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006"
+
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build the Rust core for Android
+        run: bash scripts/build-core-android.sh
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -149,6 +156,18 @@ jobs:
           grep -q 'requestLegacyExternalStorage="true"' "$MANIFEST" \
             || echo "::warning::requestLegacyExternalStorage is not set on <application>"
 
+      - name: Verify the native core is wired into the build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l modules/filecore/android/src/main/jniLibs/*/libfilecore.so
+          # The APK check later proves autolinking + packaging; here we only make
+          # sure the shared libraries exist for every ABI before Gradle runs.
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            test -s "modules/filecore/android/src/main/jniLibs/$abi/libfilecore.so" \
+              || { echo "::error::missing libfilecore.so for $abi"; exit 1; }
+          done
+
       - name: Assemble signed release APK
         working-directory: android
         run: ./gradlew --no-daemon --stacktrace :app:assembleRelease
@@ -159,6 +178,12 @@ jobs:
           set -euo pipefail
           APK="android/app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
+          # The Rust core has to be inside the APK, or the app dies on first call.
+          if ! unzip -l "$APK" | grep -q "lib/arm64-v8a/libfilecore.so"; then
+            echo "::error::libfilecore.so is missing from the APK"
+            exit 1
+          fi
+          unzip -l "$APK" | grep libfilecore.so
           mkdir -p release
           cp "$APK" "release/filestack-${GITHUB_REF_NAME}.apk"
           cd release
@@ -184,6 +209,7 @@ jobs:
           body: |
             **Signing:** ${{ env.APK_SIGNING_NOTE }}
             **SHA-256:** `${{ env.APK_SHA256 }}` (also in `SHA256SUMS.txt`)
+            **Core:** native Rust over JNI (`libfilecore.so`), no JavaScript or WebAssembly engine.
           files: |
             release/filestack-${{ github.ref_name }}.apk
             release/SHA256SUMS.txt

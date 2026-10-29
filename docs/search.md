@@ -33,9 +33,11 @@ Examples:
 invoice type:document
 ext:pdf min:1mb
 folder:true starred:true
-rust wasm type:code
+rust native type:code
 ```
 
 ## Engine details
 
-The web build calls the Rust core through WebAssembly. On native Expo/Hermes, `CoreApi` selects the TypeScript mirror until the Rust C ABI is connected through a local Expo module. `npm test` compares both engines on the same fixture corpus to prevent behavioural drift.
+Ranking runs in `rust/src/lib.rs`, called from the UI as one JNI call per query. The whole file list is handed over as JSON and the ranked hits come back in the same call, so typing in the search box costs one native round trip per keystroke rather than a filter-and-sort pass in JavaScript.
+
+Scores are computed in Rust with integer arithmetic, and the UI passes the current clock so recently changed files can float up; `cargo test` omits that clock for deterministic assertions.

@@ -4,12 +4,19 @@
 //! every platform: fuzzy search + ranking, query parsing (`type:`, `ext:`,
 //! `folder:`), sorting, storage insights and duplicate detection.
 //!
-//! The Expo app talks to this crate two ways:
-//!   * web      -> compiled to `wasm32-unknown-unknown`, invoked over the
-//!                 tiny C ABI in `ffi.rs`
-//!   * native   -> compiled to a `cdylib` and exposed through uniffi/JNI
-//!                 (see `docs/native-rust.md`)
+//! The Android app talks to this crate through one path only: the `cdylib` is
+//! loaded by the Expo module in `modules/filecore`, which calls the JNI symbol
+//! in `jni_bridge.rs`. There is no JavaScript engine and no WebAssembly copy of
+//! these algorithms any more — Rust is the only implementation.
+//!
+//! `fsops.rs` adds the filesystem work (walking a tree, reading text, mkdir /
+//! rename / copy / delete) so the JS side never walks a directory one call at a
+//! time.
 pub mod ffi;
+pub mod fsops;
+
+#[cfg(feature = "jni")]
+pub mod jni_bridge;
 
 use serde::{Deserialize, Serialize};
 
@@ -611,6 +618,35 @@ pub fn invoke(op: &str, payload: &str) -> Result<String, String> {
         "formatSize" => {
             let bytes: u64 = serde_json::from_str(payload).map_err(|e| e.to_string())?;
             Ok(serde_json::to_string(&format!("{}", format_size(bytes))).unwrap())
+        }
+        "scan" => {
+            let req: fsops::ScanRequest = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::scan(&req)?).map_err(|e| e.to_string())
+        }
+        "read_text" => {
+            let req: fsops::ReadTextRequest =
+                serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::read_text(&req)?).map_err(|e| e.to_string())
+        }
+        "mkdir" => {
+            let req: fsops::PathRequest = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::mkdir(&req)?).map_err(|e| e.to_string())
+        }
+        "remove" => {
+            let req: fsops::PathsRequest = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::remove(&req)?).map_err(|e| e.to_string())
+        }
+        "rename" => {
+            let req: fsops::MoveRequest = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::rename(&req)?).map_err(|e| e.to_string())
+        }
+        "exists" => {
+            let req: fsops::PathRequest = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::exists(&req)?).map_err(|e| e.to_string())
+        }
+        "copy" => {
+            let req: fsops::MoveRequest = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+            serde_json::to_string(&fsops::copy(&req)?).map_err(|e| e.to_string())
         }
         "ping" => Ok(serde_json::json!({
             "ok": true,

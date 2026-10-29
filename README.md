@@ -1,8 +1,8 @@
 # FileStack
 
-An offline-first file manager built with **Expo / React Native** for the UI and a **Rust core** for search, sorting and storage analysis.
+An offline-first Android file manager built with **Expo / React Native** for the UI and a **native Rust core** for everything else — search, sorting, storage analysis and the filesystem walk itself.
 
-The project runs as an Expo web preview with the Rust core compiled to a small, zero-import WebAssembly module. On iOS and Android the UI uses the same API through a parity-tested TypeScript fallback, because Expo's Hermes runtime does not provide a portable WASM path by default. A C ABI is included for a future Expo native-module bridge; see [`docs/native-rust.md`](docs/native-rust.md).
+The Rust core is compiled to a `cdylib`, packaged inside the APK and called over JNI by a local Expo module (`modules/filecore`). There is no WebAssembly build and no TypeScript copy of the algorithms: one implementation, one code path, no bridge-per-file overhead. See [`docs/native-rust.md`](docs/native-rust.md).
 
 ## Features
 
@@ -13,42 +13,57 @@ The project runs as an Expo web preview with the Rust core compiled to a small, 
 - Natural sorting by name, size, modified time or type; optionally keep folders first.
 - Star favourites; create folders; import, rename and delete files; preview supported text files.
 - Storage insights by category, largest/recent files and duplicate candidates with reclaimable bytes.
-- Two storage roots on Android: the app's private folder, or the whole device (Downloads, DCIM, WhatsApp, SD card) once you grant "All files access".
-- Demo filesystem on web; app-private documents directory on iOS. No server or cloud upload.
+- Two storage roots: the app's private folder, or the whole device (Downloads, DCIM, WhatsApp, SD card) once you grant "All files access".
+- No server, no cloud upload, no analytics.
 
 ## Run it
 
+Requirements: Node 22, JDK 17, the Android SDK with an NDK, and Rust.
+
 ```sh
 npm install
-rustup toolchain install stable
-rustup target add wasm32-unknown-unknown
-npm run core          # build Rust -> wasm -> inline into src/core/filecore.generated.ts
-npm run web           # Expo web preview
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+cargo install cargo-ndk
+export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006
+
+npm run core:android        # build libfilecore.so for arm64-v8a, armeabi-v7a, x86_64
+npx expo prebuild --platform android --clean
+npm run android             # build + install on a device or emulator
 ```
 
-Or start Expo on a simulator/device:
+`npm run core:android` must run before Gradle whenever the Rust code changes; the
+`.so` files are gitignored, so a fresh clone has to build them once.
 
-```sh
-npm start
-npm run ios           # requires macOS / Xcode
-npm run android       # requires Android Studio / SDK
-```
-
-On Android the storage pill at the top of the Files screen switches between **App storage** (the private document directory) and **Internal storage** (`/storage/emulated/0`, plus any SD card). Reading the real device needs the `MANAGE_EXTERNAL_STORAGE` permission — Android calls it "All files access" and only lets the user grant it from system settings, so the app shows a banner that opens that screen. Writes, renames and deletes follow the active root. See [`docs/android-storage.md`](docs/android-storage.md) for the permission list and the Google Play declaration this requires. On iOS the app stays inside its document directory.
+The storage pill at the top of the Files screen switches between **App storage**
+(the private document directory) and **Internal storage** (`/storage/emulated/0`,
+plus any SD card). Reading the real device needs the `MANAGE_EXTERNAL_STORAGE`
+permission — Android calls it "All files access" and only lets the user grant it
+from system settings, so the app shows a banner that opens that screen. Writes,
+renames and deletes follow the active root. See
+[`docs/android-storage.md`](docs/android-storage.md) for the permission list and
+the Google Play declaration this requires.
 
 ## Android APK release (without EAS)
 
-A GitHub Actions workflow in `.github/workflows/android-release.yml` runs Expo Prebuild and Gradle on a GitHub runner, signs the APK using repository secrets, uploads it as an Actions artifact, and attaches it to GitHub Releases for `v*` tags. Configure the persistent keystore secrets first; see [`docs/android-release.md`](docs/android-release.md). The workflow uses the built-in `GITHUB_TOKEN`, not a personal access token.
+A GitHub Actions workflow in `.github/workflows/android-release.yml` cross-compiles
+the Rust core with `cargo-ndk`, runs Expo Prebuild and Gradle on a GitHub runner,
+signs the APK using repository secrets, uploads it as an Actions artifact, and
+attaches it to GitHub Releases for `v*` tags. The build fails if `libfilecore.so`
+is missing from the APK. Configure the persistent keystore secrets first; see
+[`docs/android-release.md`](docs/android-release.md). The workflow uses the
+built-in `GITHUB_TOKEN`, not a personal access token.
 
 ## Tests
 
 ```sh
-npm test              # Rust unit tests + Rust/WASM vs TypeScript parity suite
-npm run typecheck
-npm run export:web
+npm test              # cargo test: algorithms + filesystem operations
+npm run typecheck     # tsc --noEmit
 ```
 
-The parity suite runs the actual compiled WASM and compares its search, sorting, insights, duplicate and size-formatting results with the TypeScript mirror. The corpus uses a pinned clock so ranking tests are deterministic.
+The Rust tests cover fuzzy ranking, query parsing, sorting, insights, duplicate
+detection and the native filesystem operations (nested walks, the entry cap, text
+reads, mkdir / copy / rename / remove). Ranking tests use a pinned clock so scores
+are deterministic.
 
 ## Search examples
 
@@ -60,7 +75,7 @@ ext:pdf                     # extension filter
 type:image,audio            # multiple categories
 folder:true                 # folders only
 starred:true                # favourites only
-rust wasm                   # multi-term fuzzy search
+rust native                 # multi-term fuzzy search
 ```
 
 See [`docs/search.md`](docs/search.md) for the operator reference and ranking model.
@@ -70,12 +85,14 @@ See [`docs/search.md`](docs/search.md) for the operator reference and ranking mo
 ```text
 App.tsx                     Expo app shell + tabs
 src/screens/                Files, Search, Insights
-src/fs/                     Filesystem provider; demo and device implementations
+src/fs/                     Filesystem provider (native scan, storage roots, permissions)
 src/store/FileStore.tsx     Shared browsing state and file actions
-src/core/                   Core API, WASM loader, JS fallback, shared types
-rust/src/lib.rs             Search/sort/insights/duplicates and Rust unit tests
-rust/src/ffi.rs             WebAssembly and native C ABI entry points
-scripts/build-core.mjs      Rust -> WASM -> generated TypeScript asset
-scripts/test-core.mjs       Cross-engine parity checks
-docs/                       Architecture, query syntax and native bridge notes
+src/core/                   Core API + the single JS door into Rust (native.ts)
+src/core/display.ts         Render-time helpers (size text, category bucket)
+rust/src/lib.rs             Search / sort / insights / duplicates
+rust/src/fsops.rs           Native directory walk, read, mkdir, rename, copy, delete
+rust/src/jni_bridge.rs      The one JNI symbol Android calls
+modules/filecore/           Expo module: Kotlin wrapper + jniLibs + JS interface
+scripts/build-core-android.sh   cargo-ndk build for the three Android ABIs
+docs/                       Architecture, search syntax, storage and release notes
 ```

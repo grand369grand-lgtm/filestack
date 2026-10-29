@@ -51,3 +51,6 @@ yarn-error.*
 .env
 .env.*
 /release/
+
+# Native Rust build output (produced by scripts/build-core-android.sh)
+modules/filecore/android/src/main/jniLibs/

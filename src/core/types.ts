@@ -1,5 +1,5 @@
-// Shared types. The Rust core and the TypeScript fallback both speak exactly
-// this shape, so the UI never knows which engine answered.
+// Shared types for the JSON the Rust core speaks, so the UI only ever deals
+// with one shape.
 
 export type EntryKind = 'file' | 'dir';
 

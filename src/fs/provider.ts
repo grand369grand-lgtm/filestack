@@ -18,9 +18,8 @@ export interface StorageAccess {
 }
 
 /**
- * The filesystem surface the app needs. Two implementations:
- *   device.ts — real files on the phone (expo-file-system)
- *   mock.ts   — a seeded demo tree so the UI is fully explorable in a browser
+ * The filesystem surface the app needs, implemented once in `device.ts` over
+ * the native Rust core.
  */
 export interface FsProvider {
   kind: 'device' | 'demo';
